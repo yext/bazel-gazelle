@@ -32,7 +32,22 @@ import (
 	"github.com/bazelbuild/bazel-gazelle/rule"
 )
 
+const workspacePrefix = "alpha"
+
 func (_ *goLang) Imports(_ *config.Config, r *rule.Rule, f *rule.File) []resolve.ImportSpec {
+	if isCorpProtos(r.Kind()) {
+		// Update the rule name from "foo_proto" => foo_go_proto"
+		name := r.Name()
+		if strings.HasSuffix(name, "_proto") {
+			go_name := name[:len(name)-len("_proto")] + "_go_proto"
+			r.SetName(go_name)
+		}
+		if importPath := r.AttrString("importpath"); importPath != "" {
+			return []resolve.ImportSpec{{goName, importPath}}
+		}
+		importPath := path.Join(workspacePrefix, f.Pkg)
+		return []resolve.ImportSpec{{goName, importPath}}
+	}
 	if !isGoLibrary(r.Kind()) || isExtraLibrary(r) {
 		return nil
 	}
@@ -374,4 +389,8 @@ func isExtraLibrary(r *rule.Rule) bool {
 	default:
 		return false
 	}
+}
+
+func isCorpProtos(kind string) bool {
+	return kind == "yext_protos"
 }
