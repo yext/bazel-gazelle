@@ -35,6 +35,33 @@ func (_ *protoLang) GenerateRules(args language.GenerateArgs) (empty, gen []*rul
 		return nil, nil
 	}
 
+	g := newGenerator(args)
+	pkgs := g.buildPackages(pc, args.Dir)
+	for _, pkg := range pkgs {
+		r := g.generateProto(pc, pkg)
+		if r.IsEmpty(protoKinds[r.Kind()]) {
+			empty = append(empty, r)
+		} else {
+			gen = append(gen, r)
+		}
+	}
+	sort.SliceStable(gen, func(i, j int) bool {
+		return gen[i].Name() < gen[j].Name()
+	})
+	empty = append(empty, g.generateEmpty()...)
+	return empty, gen
+}
+
+type generator struct {
+	c                   *config.Config
+	file                *rule.File
+	rel                 string
+	shouldSetVisibility bool
+	regularProtoFiles   []string
+	genProtoFiles       []string
+}
+
+func newGenerator(args language.GenerateArgs) *generator {
 	var regularProtoFiles []string
 	for _, name := range args.RegularFiles {
 		if strings.HasSuffix(name, ".proto") {
@@ -47,21 +74,15 @@ func (_ *protoLang) GenerateRules(args language.GenerateArgs) (empty, gen []*rul
 			genProtoFiles = append(args.GenFiles, name)
 		}
 	}
-	pkgs := buildPackages(pc, args.Dir, args.Rel, regularProtoFiles, genProtoFiles)
-	shouldSetVisibility := !hasDefaultVisibility(args.File)
-	for _, pkg := range pkgs {
-		r := generateProto(pc, args.Rel, pkg, shouldSetVisibility)
-		if r.IsEmpty(protoKinds[r.Kind()]) {
-			empty = append(empty, r)
-		} else {
-			gen = append(gen, r)
-		}
+	shouldSetVisibility := args.File == nil || !hasDefaultVisibility(args.File)
+	return &generator{
+		c:                   args.Config,
+		file:                args.File,
+		rel:                 args.Rel,
+		shouldSetVisibility: shouldSetVisibility,
+		regularProtoFiles:   regularProtoFiles,
+		genProtoFiles:       genProtoFiles,
 	}
-	sort.SliceStable(gen, func(i, j int) bool {
-		return gen[i].Name() < gen[j].Name()
-	})
-	empty = append(empty, generateEmpty(args.File, regularProtoFiles, genProtoFiles)...)
-	return empty, gen
 }
 
 // RuleName returns a name for a proto_library derived from the given strings.
@@ -90,9 +111,9 @@ func RuleName(names ...string) string {
 // buildPackage extracts metadata from the .proto files in a directory and
 // constructs possibly several packages, then selects a package to generate
 // a proto_library rule for.
-func buildPackages(pc *ProtoConfig, dir, rel string, protoFiles, genFiles []string) []*Package {
+func (g *generator) buildPackages(pc *ProtoConfig, dir string) []*Package {
 	packageMap := make(map[string]*Package)
-	for _, name := range protoFiles {
+	for _, name := range g.regularProtoFiles {
 		info := protoFileInfo(dir, name)
 		key := info.PackageName
 		if pc.groupOption != "" {
@@ -111,14 +132,14 @@ func buildPackages(pc *ProtoConfig, dir, rel string, protoFiles, genFiles []stri
 
 	switch pc.Mode {
 	case DefaultMode:
-		pkg, err := selectPackage(dir, rel, packageMap)
+		pkg, err := selectPackage(dir, g.rel, packageMap)
 		if err != nil {
 			log.Print(err)
 		}
 		if pkg == nil {
 			return nil // empty rule created in generateEmpty
 		}
-		for _, name := range genFiles {
+		for _, name := range g.genProtoFiles {
 			pkg.addGenFile(dir, name)
 		}
 		return []*Package{pkg}
@@ -183,14 +204,14 @@ func goPackageName(pkg *Package) string {
 
 // generateProto creates a new proto_library rule for a package. The rule may
 // be empty if there are no sources.
-func generateProto(pc *ProtoConfig, rel string, pkg *Package, shouldSetVisibility bool) *rule.Rule {
+func (g *generator) generateProto(pc *ProtoConfig, pkg *Package) *rule.Rule {
 	var name string
 	if pc.Mode == DefaultMode {
-		name = RuleName(goPackageName(pkg), pc.GoPrefix, rel)
+		name = RuleName(goPackageName(pkg), pc.GoPrefix, g.rel)
 	} else {
-		name = RuleName(pkg.Options[pc.groupOption], pkg.Name, rel)
+		name = RuleName(pkg.Options[pc.groupOption], pkg.Name, g.rel)
 	}
-	r := rule.NewRule("proto_library", name)
+	r := g.newRule("proto_library", name)
 	srcs := make([]string, 0, len(pkg.Files))
 	for f := range pkg.Files {
 		srcs = append(srcs, f)
@@ -209,8 +230,8 @@ func generateProto(pc *ProtoConfig, rel string, pkg *Package, shouldSetVisibilit
 	for k, v := range pkg.Options {
 		r.SetPrivateAttr(k, v)
 	}
-	if shouldSetVisibility {
-		vis := checkInternalVisibility(rel, "//visibility:public")
+	if g.shouldSetVisibility {
+		vis := checkInternalVisibility(g.rel, "//visibility:public")
 		r.SetAttr("visibility", []string{vis})
 	}
 	return r
@@ -219,21 +240,21 @@ func generateProto(pc *ProtoConfig, rel string, pkg *Package, shouldSetVisibilit
 // generateEmpty generates a list of proto_library rules that may be deleted.
 // This is generated from existing proto_library rules with srcs lists that
 // don't match any static or generated files.
-func generateEmpty(f *rule.File, regularFiles, genFiles []string) []*rule.Rule {
-	if f == nil {
+func (g *generator) generateEmpty() []*rule.Rule {
+	if g.file == nil {
 		return nil
 	}
 	knownFiles := make(map[string]bool)
-	for _, f := range regularFiles {
+	for _, f := range g.regularProtoFiles {
 		knownFiles[f] = true
 	}
-	for _, f := range genFiles {
+	for _, f := range g.genProtoFiles {
 		knownFiles[f] = true
 	}
 	var empty []*rule.Rule
 outer:
-	for _, r := range f.Rules {
-		if r.Kind() != "proto_library" {
+	for _, r := range g.file.Rules {
+		if r.Kind() != g.c.MapKind("proto_library") {
 			continue
 		}
 		srcs := r.AttrStrings("srcs")
@@ -246,7 +267,7 @@ outer:
 				continue outer
 			}
 		}
-		empty = append(empty, rule.NewRule("proto_library", r.Name()))
+		empty = append(empty, g.newRule("proto_library", r.Name()))
 	}
 	return empty
 }
@@ -275,4 +296,9 @@ func checkInternalVisibility(rel, visibility string) string {
 		visibility = "//:__subpackages__"
 	}
 	return visibility
+}
+
+// newRule returns a new rule, applying any configured kind mappings.
+func (g *generator) newRule(ruleKind, ruleName string) *rule.Rule {
+	return rule.NewRule(g.c.MapKind(ruleKind), ruleName)
 }
