@@ -35,7 +35,10 @@ func FindRuleWithOverride(c *config.Config, imp ImportSpec, lang string) (label.
 		o := rc.overrides[i]
 		if o.matches(imp, lang) {
 			return o.dep, true
+		} else if ok := o.pathMatches(imp, lang); ok {
+			return label.New(o.dep.Repo, strings.Replace(o.dep.Pkg, o.imp.Imp, imp.Imp, 1), o.dep.Name), true
 		}
+
 	}
 	return label.NoLabel, false
 }
@@ -49,6 +52,13 @@ type overrideSpec struct {
 func (o overrideSpec) matches(imp ImportSpec, lang string) bool {
 	return imp.Lang == o.imp.Lang &&
 		imp.Imp == o.imp.Imp &&
+		(o.lang == "" || o.lang == lang)
+}
+
+func (o overrideSpec) pathMatches(imp ImportSpec, lang string) bool {
+	index := strings.Index(imp.Imp, o.imp.Imp)
+	return imp.Lang == o.imp.Lang &&
+		index == 0 &&
 		(o.lang == "" || o.lang == lang)
 }
 
