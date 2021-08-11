@@ -32,10 +32,10 @@ import (
 	"github.com/bazelbuild/bazel-gazelle/rule"
 )
 
-const workspacePrefix = "alpha"
-
-func (_ *goLang) Imports(_ *config.Config, r *rule.Rule, f *rule.File) []resolve.ImportSpec {
+func (_ *goLang) Imports(c *config.Config, r *rule.Rule, f *rule.File) []resolve.ImportSpec {
 	if isCorpProtos(r.Kind()) {
+		gc := getGoConfig(c)
+
 		// Update the rule name from "foo_proto" => foo_go_proto"
 		name := r.Name()
 		if strings.HasSuffix(name, "_proto") {
@@ -45,7 +45,7 @@ func (_ *goLang) Imports(_ *config.Config, r *rule.Rule, f *rule.File) []resolve
 		if importPath := r.AttrString("importpath"); importPath != "" {
 			return []resolve.ImportSpec{{goName, importPath}}
 		}
-		importPath := path.Join(workspacePrefix, f.Pkg)
+		importPath := path.Join(gc.corpProtosModule, f.Pkg)
 		return []resolve.ImportSpec{{goName, importPath}}
 	}
 	if !isGoLibrary(r.Kind()) || isExtraLibrary(r) {
@@ -179,10 +179,19 @@ func ResolveGo(c *config.Config, ix *resolve.RuleIndex, rc *repo.RemoteCache, im
 		}
 	}
 
+	// Special case for imports of targets in the corporate workspace, but from
+	// another workspace (e.g. with the corporate workspace being used as an
+	// external local_repository).
+	if l, err := resolveWithCorpProtosConvention(c, ix, imp, from); err != nil {
+		return l, fmt.Errorf("failed to resolve target for %s: %v", imp, err)
+	} else if l != label.NoLabel {
+		return l, nil
+	}
+
 	if gc.depMode == vendorMode {
 		return resolveVendored(gc, imp)
 	}
-	var resolveFn func (string) (string, string, error)
+	var resolveFn func(string) (string, string, error)
 	if gc.depMode == staticMode {
 		resolveFn = rc.RootStatic
 	} else if gc.moduleMode || pathWithoutSemver(imp) != "" {
@@ -294,6 +303,7 @@ func resolveToExternalLabel(c *config.Config, resolveFn func(string) (string, st
 		}
 	}
 
+	pkg = path.Join(gc.repoModuleRoot[repo], pkg)
 	name := libNameByConvention(nc, imp, "")
 	return label.New(repo, pkg, name), nil
 }
@@ -364,6 +374,21 @@ func resolveWithIndexProto(c *config.Config, ix *resolve.RuleIndex, imp string, 
 		return label.NoLabel, skipImportError
 	}
 	return matches[0].Label, nil
+}
+
+func resolveWithCorpProtosConvention(c *config.Config, _ *resolve.RuleIndex, imp string, _ label.Label) (label.Label, error) {
+	gc := getGoConfig(c)
+	if !strings.HasPrefix(imp, gc.corpProtosModule+"/") {
+		return label.NoLabel, nil
+	}
+	if gc.corpProtosRepo == "" {
+		return label.NoLabel, notFoundError
+	}
+	var (
+		pkg  = imp[len(gc.corpProtosModule)+1:]
+		name = path.Base(imp) + "_go_proto"
+	)
+	return label.New(gc.corpProtosRepo, pkg, name), nil
 }
 
 func isGoLibrary(kind string) bool {
