@@ -125,11 +125,22 @@ type goConfig struct {
 	// buildTagsAttr are attributes for go_repository rules, set on the command
 	// line.
 	buildDirectivesAttr, buildExternalAttr, buildExtraArgsAttr, buildFileGenerationAttr, buildFileNamesAttr, buildFileProtoModeAttr, buildTagsAttr string
+
+	// map of external repo names and the path prefix to the module root. This
+	// can be used when using external repos whose modules are not rooted in the
+	// workspace root, and whose module names do not specify their full path.
+	repoModuleRoot map[string]string
+
+	// corpProtosModule and corpProtosRepo are the module name and its external
+	// repo name, respectively, containing the corporate ..._go_proto targets.
+	corpProtosModule, corpProtosRepo string
 }
 
 var (
 	defaultGoProtoCompilers = []string{"@io_bazel_rules_go//proto:go_proto"}
 	defaultGoGrpcCompilers  = []string{"@io_bazel_rules_go//proto:go_grpc"}
+	defaultCorpProtosModule = "alpha"
+	defaultCorpProtosRepo   = ""
 )
 
 func newGoConfig() *goConfig {
@@ -327,6 +338,7 @@ var validBuildFileProtoModeAttr = []string{"default", "legacy", "disable", "disa
 func (*goLang) KnownDirectives() []string {
 	return []string{
 		"build_tags",
+		"corp_protos_module",
 		"go_generate_proto",
 		"go_grpc_compilers",
 		"go_naming_convention",
@@ -335,6 +347,7 @@ func (*goLang) KnownDirectives() []string {
 		"go_visibility",
 		"importmap_prefix",
 		"prefix",
+		"repo_module_root",
 	}
 }
 
@@ -520,6 +533,13 @@ Update io_bazel_rules_go to a newer version in your WORKSPACE file.`
 				gc.preprocessTags()
 				gc.setBuildTags(d.Value)
 
+			case "corp_protos_module":
+				fs := strings.Fields(d.Value)
+				if len(fs) != 2 {
+					log.Print("parsing corp_protos_module: must specify exactly 2 fields: <module> <repo>")
+				}
+				gc.corpProtosModule, gc.corpProtosRepo = fs[0], fs[1]
+
 			case "go_generate_proto":
 				if goGenerateProto, err := strconv.ParseBool(d.Value); err == nil {
 					gc.goGenerateProto = goGenerateProto
@@ -570,6 +590,17 @@ Update io_bazel_rules_go to a newer version in your WORKSPACE file.`
 
 			case "prefix":
 				setPrefix(d.Value)
+
+			case "repo_module_root":
+				fs := strings.Fields(d.Value)
+				if len(fs) != 2 {
+					log.Print("parsing repo_module_root: must specify exactly 2 fields: <repo> <rootpath>")
+				}
+				repo, rootpath := fs[0], fs[1]
+				if gc.repoModuleRoot == nil {
+					gc.repoModuleRoot = map[string]string{}
+				}
+				gc.repoModuleRoot[repo] = rootpath
 			}
 		}
 
@@ -598,6 +629,13 @@ Update io_bazel_rules_go to a newer version in your WORKSPACE file.`
 
 	if gc.goNamingConvention == unknownNamingConvention {
 		gc.goNamingConvention = detectNamingConvention(c, f)
+	}
+
+	if gc.corpProtosModule == "" {
+		gc.corpProtosModule = defaultCorpProtosModule
+	}
+	if gc.corpProtosRepo == "" {
+		gc.corpProtosRepo = defaultCorpProtosRepo
 	}
 }
 
