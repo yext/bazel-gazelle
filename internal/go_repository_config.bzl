@@ -40,7 +40,7 @@ def _go_repository_config_impl(ctx):
             fail("generate_repo_config: " + result.stderr)
         if result.stdout:
             for f in result.stdout.splitlines():
-                f = f.lstrip()
+                f = f.lstrip().replace('\\', '/')
                 if len(f) > 0:
                     macro_label_str = "@" + ctx.attr.config.workspace_name + "//:" + f
                     if "~" in ctx.attr.config.workspace_name:
