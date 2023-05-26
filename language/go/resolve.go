@@ -380,6 +380,7 @@ func resolveWithCorpProtosConvention(c *config.Config, _ *resolve.RuleIndex, imp
 	if !strings.HasPrefix(imp, gc.corpProtosModule+"/") {
 		return label.NoLabel, nil
 	}
+	fmt.Println("corp protos", gc.corpProtosModule, gc.corpProtosRepo, imp)
 	if gc.corpProtosRepo == "" {
 		return label.NoLabel, notFoundError
 	}
