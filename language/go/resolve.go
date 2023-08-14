@@ -399,7 +399,7 @@ func resolveWithCorpProtosConvention(c *config.Config, _ *resolve.RuleIndex, imp
 		return label.NoLabel, nil
 	}
 	if gc.corpProtosRepo == "" {
-		return label.NoLabel, notFoundError
+		return label.NoLabel, errNotFound
 	}
 	var (
 		pkg  = imp[len(gc.corpProtosModule)+1:]
